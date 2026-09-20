@@ -1,0 +1,13 @@
+# environments and caches
+venv/
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# secrets and runtime data created by the app
+.streamlit/secrets.toml
+data/backups/
+models/backups/
+models/training_log.csv
+data/processed/uploaded_monthly.csv
