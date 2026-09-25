@@ -12,7 +12,7 @@ import streamlit as st
 
 import data_tools as dt
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 FORECAST_DISCLAIMER = ("⚠️ AI can make mistakes. This forecast is only an estimate from a machine-learning model "
                        "trained on limited data, so don't believe it blindly. Please check with real market prices "
                        "before making any decision.")
@@ -353,7 +353,8 @@ with tab_forecast:
 
                     if st.checkbox("View all data (every district and commodity)", key="forecast_view_all"):
                         st.caption(f"The full monthly dataset the Forecast tab draws from - {len(monthly_df):,} rows.")
-                        st.dataframe(monthly_df, hide_index=True, height=320)
+                        display_all = monthly_df.assign(date=monthly_df["date"].dt.strftime("%Y-%m"))
+                        st.dataframe(display_all, hide_index=True, height=320)
 
     if comm1:
         with st.container(border=True):
@@ -515,21 +516,22 @@ with tab_submit:
         st.write(f"Logged in as **{user_id}**. A price that matches the recent trend for that item is added "
                 "immediately and earns you 1 point right away. One that looks like an unusual jump or drop "
                 "is held for an administrator to check first - the point comes once it's approved.")
+        st.caption(f"Recorded for the current month, **{dt.current_month_start():%B %Y}** - a submission is "
+                  "always for the price right now, so this isn't something you can change.")
 
         locations5, commodities5, medians5 = dt.known_names()
         with st.form("community_form", clear_on_submit=True):
             f1, f2 = st.columns(2)
-            sub_date = f1.date_input("Month this price is from", value=dt.current_month_start())
-            sub_location = f2.selectbox("District", locations5, index=index_of(locations5, "Dhaka"))
-            f3, f4 = st.columns(2)
-            sub_commodity = f3.selectbox("Commodity", commodities5,
+            sub_location = f1.selectbox("District", locations5, index=index_of(locations5, "Dhaka"))
+            sub_commodity = f2.selectbox("Commodity", commodities5,
                                          index=index_of(commodities5, "Broiler chicken"))
-            sub_price = f4.number_input("Price (Tk per kg)", min_value=0.0, step=1.0)
+            sub_price = st.number_input("Price (Tk per kg)", min_value=0.0, step=1.0)
             submitted5 = st.form_submit_button("Submit", type="primary")
 
         if submitted5:
-            ok, status, info = dt.submit_community_price(sub_date, sub_location, sub_commodity, sub_price,
-                                                          user_id, monthly_df, locations5, commodities5, medians5)
+            ok, status, info = dt.submit_community_price(dt.current_month_start(), sub_location, sub_commodity,
+                                                          sub_price, user_id, monthly_df, locations5,
+                                                          commodities5, medians5)
             if not ok:
                 st.error(f"Not saved: {info}")
             elif status == "auto_approved":
@@ -716,7 +718,8 @@ with tab_admin:
                             st.dataframe(rejected, hide_index=True)
                         if len(accepted) > 0:
                             st.write("Accepted rows (preview):")
-                            st.dataframe(accepted.head(20), hide_index=True)
+                            preview = accepted.head(20).assign(date=accepted.head(20)["date"].dt.strftime("%Y-%m"))
+                            st.dataframe(preview, hide_index=True)
                             if st.button("Save accepted rows to the database", type="primary"):
                                 added, updated = dt.save_upload(accepted)
                                 st.session_state["flash"] = ("success", f"Saved: {added} new rows added, "
@@ -796,16 +799,19 @@ with tab_admin:
             st.write("Upload a **CSV** file with exactly these 4 columns (any order):")
             st.table(pd.DataFrame({
                 "Column": ["date", "location", "commodity", "price_per_kg"],
-                "What to put": ["First day of the month", "District name", "Commodity name", "Price in Tk per kg"],
-                "Example": ["2026-08-01", "Dhaka", "Broiler chicken", "181.50"],
+                "What to put": ["Year and month (day is ignored if given)", "District name", "Commodity name", "Price in Tk per kg"],
+                "Example": ["2026-08 or 2026-08-01", "Dhaka", "Broiler chicken", "181.50"],
             }))
             st.code("date,location,commodity,price_per_kg\n"
-                    "2026-07-01,Dhaka,Broiler chicken,180.20\n"
-                    "2026-08-01,Dhaka,Broiler chicken,181.50\n"
-                    "2026-08-01,Chattogram,Broiler chicken,168.30", language="text")
+                    "2026-07,Dhaka,Broiler chicken,180.20\n"
+                    "2026-08,Dhaka,Broiler chicken,181.50\n"
+                    "2026-08,Chattogram,Broiler chicken,168.30", language="text")
             st.markdown(
-                "- One row = one month of one commodity in one district.\n"
-                "- Dates must look like `2026-08-01` (or `2026-08`). Formats like `8/1/2026` are rejected because day and month can be swapped.\n"
+                "- One row = one month of one commodity in one district. Every price in this app is a **monthly** "
+                "price - there is no day-level data anywhere, so the day is not meaningful.\n"
+                "- Dates must look like `2026-08` (YYYY-MM) or `2026-08-01` (YYYY-MM-DD). Formats like `8/1/2026` "
+                "are rejected because day and month can be swapped. If a day is included, **it is ignored** - "
+                "`2026-08-15` and `2026-08-01` are both stored as the same month, `2026-08`.\n"
                 "- Prices are numbers above 0 in Tk/kg. Prices far away from the usual price of that commodity are rejected.\n"
                 "- District and commodity names must match the app's names (capital letters do not matter). Wrong spellings are rejected with a suggestion.\n"
                 "- Several rows for the same district, commodity and month (for example different markets) are averaged into one.\n"

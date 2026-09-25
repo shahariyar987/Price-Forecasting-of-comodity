@@ -4,11 +4,15 @@ A Streamlit web app that **forecasts retail prices** and **estimates prices acro
 in Bangladesh. Visitors land on an intro page, then continue with just a name or phone number (no password) to use the
 app and earn points. Administrators can upload real monthly prices and retrain the forecast model from inside the app.
 
-**Version 2.0.** Adds the landing page and name/phone login, points and anomaly-aware submission review (see
+**Version 2.1.** The Submit-a-price tab no longer has a date to pick - a submission is always for the current
+month, automatically. Dates shown anywhere in the app (tables, the admin "view all data" and upload preview,
+the CSV format guide) now consistently show just year and month, since every price in this app is monthly and
+the day was never meaningful.
+
+**Version 2.0.** Added the landing page and name/phone login, points and anomaly-aware submission review (see
 "Submission review" and "Points" below), an Admin > Results tab for model accuracy and submission insight, a
-"view all data" option back in the Forecast and Cross-district admin details, and a visual pass across the whole
-app. `data_tools.py` was also commented much more thoroughly throughout, especially around how the model itself
-works.
+"view all data" option in the Forecast and Cross-district admin details, and a visual pass across the whole app.
+`data_tools.py` was also commented much more thoroughly throughout, especially around how the model itself works.
 
 ## Features
 
@@ -19,7 +23,7 @@ After the landing page and a one-field login (name or phone number - see "Accoun
 | **Forecast** | Predicts the price of a commodity in a district for 1 to 18 months, starting next month. Shows a chart, a downloadable table, the data basis, and a second chart comparing that commodity's latest price across every district. |
 | **Cross-district** | Enter the known price in one district and get an estimate for another district (price-ratio method), with a chart of both districts' real yearly prices. |
 | **Budget planner** | Enter a budget and a time horizon; ranks district/commodity combinations by predicted price rise, keeping only what the budget can afford. Fish is excluded by default (it doesn't store like rice or other durable goods). Costs one free run or one point per use - see "Points" below. |
-| **Submit a price** | A single (date, district, commodity, price) submission. One that matches the recent trend for that item is added immediately and earns a point right away; one that looks like an unusual spike or drop is held for an administrator to check first - see "Submission review" below. |
+| **Submit a price** | A (district, commodity, price) submission for the current month - the month is always "now", it isn't a choice. One that matches the recent trend for that item is added immediately and earns a point right away; one that looks like an unusual spike or drop is held for an administrator to check first - see "Submission review" below. |
 | **Admin** (password) | Live dataset statistics by commodity and category, a Results tab with current model accuracy and submission/points insight, upload monthly prices as CSV with automatic checks, review flagged public submissions, undo an upload, retrain the forecast model with a safe test before replacing it, and see the numbers behind each result (including a "view all data" option in the Forecast and Cross-district tabs). |
 
 ## Quick start
@@ -76,7 +80,8 @@ series still using the generated monthly data, an apparent "fast riser" often ju
 average gap rather than an observed trend. It has no concept of storage cost or shelf life beyond the fish
 exclusion, so treat it as a starting point for comparison, not financial advice.
 
-**Submission review.** A public submission is always checked first with the same rules as an admin CSV upload
+**Submission review.** A public submission is always for the current month - there is no date to pick, since it
+represents the price right now - and is checked first with the same rules as an admin CSV upload
 (`validate_upload` - unknown names, future dates, and a price more than `MAX_PRICE_FACTOR` (3x) away from that
 commodity's overall median are rejected outright). What happens next is a finer check, `assess_submission`: the
 price is compared against *that specific district and commodity's own* last known price, not the overall median -
@@ -140,12 +145,14 @@ district and commodity, not just the current selection). They disappear again wh
 ## Admin tab: uploading data
 
 Upload a CSV with the columns `date, location, commodity, price_per_kg` (see the *File format* sub-tab in the app).
-Every row is checked before anything is saved: date format, future months, prices, and district and commodity names
-(wrong spellings are rejected with a suggestion). Saving makes a backup first, and **Undo last upload** restores it.
-**Retrain model** trains a new model, tests it on the latest 3 months against the baseline "next month = this month",
-and only replaces the current model when you confirm. The old model is kept in `models/backups/`. The **Results**
-tab is where to check on accuracy afterwards - both the live model's current accuracy and the history of every
-retrain - without needing to retrain again just to see it.
+Every price in this app is a **monthly** price, so `date` only needs a year and month (`2026-08`); a full date
+(`2026-08-01`) is also accepted, but the day is always ignored - `2026-08-15` and `2026-08-01` both become the
+same month, `2026-08`. Every row is checked before anything is saved: date format, future months, prices, and
+district and commodity names (wrong spellings are rejected with a suggestion). Saving makes a backup first, and
+**Undo last upload** restores it. **Retrain model** trains a new model, tests it on the latest 3 months against
+the baseline "next month = this month", and only replaces the current model when you confirm. The old model is
+kept in `models/backups/`. The **Results** tab is where to check on accuracy afterwards - both the live model's
+current accuracy and the history of every retrain - without needing to retrain again just to see it.
 
 ## Project structure
 
