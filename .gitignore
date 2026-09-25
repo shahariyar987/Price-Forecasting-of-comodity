@@ -11,3 +11,6 @@ data/backups/
 models/backups/
 models/training_log.csv
 data/processed/uploaded_monthly.csv
+data/processed/community_submissions.csv
+data/processed/points_ledger.csv
+data/processed/users.csv

@@ -192,6 +192,25 @@ def test_saved_model_matches_its_feature_list():
     assert features[:6] == ["price_per_kg", "month_num", "time_index", "lag1", "lag2", "lag3"]
 
 
+def test_evaluate_current_model_reports_accuracy_without_changing_the_saved_model():
+    monthly = dt.load_effective_monthly()
+    model, features = dt.load_model()
+    before_path_size = os.path.getsize(dt.MODEL_PATH)
+
+    result = dt.evaluate_current_model(monthly, model, features, test_months=3)
+    assert result["test_rows"] > 0
+    assert result["mae_model"] >= 0 and result["mae_baseline"] >= 0
+    assert isinstance(result["beats_baseline"], bool)
+    assert os.path.getsize(dt.MODEL_PATH) == before_path_size          # evaluating never writes to the model file
+
+
+def test_evaluate_current_model_needs_enough_data():
+    model, features = dt.load_model()
+    tiny = dt.load_effective_monthly().iloc[0:0]
+    with pytest.raises(ValueError):
+        dt.evaluate_current_model(tiny, model, features)
+
+
 # ---------------------------------------------------------------- cross-district estimate
 def test_cross_district_ratio_uses_only_years_with_both_prices():
     districts = pd.DataFrame({
@@ -235,3 +254,285 @@ def test_district_data_is_clean():
     assert (districts["price_per_kg"] > 0).all()
     assert not districts.duplicated(["Year", "location", "commodity"]).any()
     assert districts["price_per_kg"].max() < 3000                # typos such as 12,157 Tk/kg were removed
+
+
+# ---------------------------------------------------------------- statistics and comparison
+def test_every_commodity_has_exactly_one_category():
+    districts = dt.load_district_prices()
+    assert set(districts["category"]) == {"Chicken", "Rice", "Fish"}
+    categories_per_commodity = districts.groupby("commodity")["category"].nunique()
+    assert (categories_per_commodity == 1).all()
+
+
+def test_commodity_stats_has_one_row_per_commodity_with_a_category():
+    stats = dt.commodity_stats(dt.load_effective_monthly())
+    districts = dt.load_district_prices()
+    assert len(stats) == districts["commodity"].nunique()
+    assert not stats["category"].isna().any()
+    assert {"avg_2025", "avg_2026", "pct_change_2025_2026", "districts_covered"}.issubset(stats.columns)
+
+
+def test_category_summary_covers_all_three_categories():
+    summary = dt.category_summary()
+    assert set(summary["category"]) == {"Chicken", "Rice", "Fish"}
+    assert summary["commodities"].sum() == dt.load_district_prices()["commodity"].nunique()
+
+
+def test_commodity_price_by_district_is_one_row_per_district_sorted_high_to_low():
+    monthly = dt.load_effective_monthly()
+    snapshot = dt.commodity_price_by_district(monthly, "Broiler chicken")
+    assert not snapshot.empty
+    assert not snapshot["location"].duplicated().any()
+    assert snapshot["price_per_kg"].is_monotonic_decreasing
+
+
+# ---------------------------------------------------------------- budget planner
+def test_budget_opportunities_excludes_fish_by_default():
+    monthly = dt.load_effective_monthly()
+    model, features = dt.load_model()
+    out = dt.budget_opportunities(monthly, model, features, budget=1000, months_ahead=6, location="Dhaka")
+    assert not out.empty
+    assert "Fish" not in set(out["category"])
+
+
+def test_budget_opportunities_only_lists_whats_affordable_and_ranks_by_predicted_change():
+    monthly = dt.load_effective_monthly()
+    model, features = dt.load_model()
+    out = dt.budget_opportunities(monthly, model, features, budget=60, months_ahead=6, location="Dhaka")
+    assert (out["current_price"] <= 60).all()
+    assert out["predicted_change_pct"].is_monotonic_decreasing
+
+
+def test_budget_opportunities_rejects_a_non_positive_budget():
+    monthly = dt.load_effective_monthly()
+    model, features = dt.load_model()
+    with pytest.raises(ValueError):
+        dt.budget_opportunities(monthly, model, features, budget=0, months_ahead=6, location="Dhaka")
+
+
+# ---------------------------------------------------------------- login (no password)
+def test_a_new_identifier_creates_an_account(monkeypatch, tmp_path):
+    monkeypatch.setattr(dt, "USERS_PATH", str(tmp_path / "users.csv"))
+    identifier, is_new = dt.login_or_register("Rafi Uddin")
+    assert identifier == "Rafi Uddin" and is_new is True
+
+
+def test_the_same_identifier_logs_back_into_the_same_account(monkeypatch, tmp_path):
+    monkeypatch.setattr(dt, "USERS_PATH", str(tmp_path / "users.csv"))
+    dt.login_or_register("Rafi Uddin")
+    identifier, is_new = dt.login_or_register("Rafi Uddin")
+    assert identifier == "Rafi Uddin" and is_new is False
+    assert len(dt.load_users()) == 1                            # no duplicate account was created
+
+
+def test_an_empty_identifier_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setattr(dt, "USERS_PATH", str(tmp_path / "users.csv"))
+    with pytest.raises(ValueError):
+        dt.login_or_register("   ")
+
+
+# ---------------------------------------------------------------- anomaly detection
+def _dhaka_broiler():
+    monthly = dt.load_effective_monthly()
+    sub = monthly[(monthly["location"] == "Dhaka") & (monthly["commodity"] == "Broiler chicken")]
+    last_price = float(sub.sort_values("date")["price_per_kg"].iloc[-1])
+    return last_price, monthly
+
+
+def test_a_price_within_the_accept_limits_is_not_unusual():
+    last_price, monthly = _dhaka_broiler()
+    # 30% rise and 15% fall are exactly at the accept limit - a hair under each should still be accepted.
+    just_under_rise = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 1.29, 2))
+    just_under_fall = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 0.86, 2))
+    assert just_under_rise["unusual"] is False and just_under_rise["reason"] is None
+    assert just_under_fall["unusual"] is False and just_under_fall["reason"] is None
+    assert just_under_rise["reference_price"] == pytest.approx(last_price)
+
+
+def test_a_rise_or_fall_just_past_its_accept_limit_is_moderate():
+    last_price, monthly = _dhaka_broiler()
+    rise = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 1.35, 2))    # 35% rise: past the 30% rise limit, short of the 50% severe mark
+    fall = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 0.80, 2))     # 20% fall: past the 15% fall limit, short of the 30% severe mark
+    assert rise["unusual"] is True and rise["severity"] == "moderate" and "rise" in rise["reason"]
+    assert fall["unusual"] is True and fall["severity"] == "moderate" and "drop" in fall["reason"]
+
+
+def test_a_rise_or_fall_past_the_severe_limit_is_labelled_severe():
+    last_price, monthly = _dhaka_broiler()
+    rise = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 1.6, 2))     # 60% rise: past the 50% severe mark
+    fall = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 0.6, 2))      # 40% fall: past the 30% severe mark
+    assert rise["unusual"] is True and rise["severity"] == "severe"
+    assert fall["unusual"] is True and fall["severity"] == "severe"
+
+
+def test_the_fall_limit_is_stricter_than_the_rise_limit():
+    """A 20% move is accepted as a rise but flagged as a fall - rise and fall use different limits on purpose."""
+    last_price, monthly = _dhaka_broiler()
+    rise_20 = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 1.20, 2))
+    fall_20 = dt.assess_submission(monthly, "Dhaka", "Broiler chicken", round(last_price * 0.80, 2))
+    assert rise_20["unusual"] is False
+    assert fall_20["unusual"] is True
+
+
+def test_a_series_with_no_prior_data_is_always_unusual():
+    monthly = dt.load_effective_monthly()
+    empty_monthly = monthly.iloc[0:0]
+    result = dt.assess_submission(empty_monthly, "Dhaka", "Broiler chicken", 180)
+    assert result["unusual"] is True and result["reference_price"] is None and result["severity"] == "moderate"
+
+
+# ---------------------------------------------------------------- public price submissions
+def test_a_normal_price_is_added_immediately_and_earns_a_point(sandbox, points_sandbox, monkeypatch):
+    monkeypatch.setattr(dt, "COMMUNITY_PATH", str(sandbox / "community.csv"))
+    last_price, monthly = _dhaka_broiler()
+    locs, coms, medians = dt.known_names()
+
+    ok, status, info = dt.submit_community_price("2026-08-01", "Dhaka", "Broiler chicken",
+                                                 round(last_price * 1.05, 2), "Rafi", monthly, locs, coms, medians)
+    assert ok and status == "auto_approved" and info["unusual"] is False
+    assert len(dt.load_uploaded()) == 1
+    assert dt.pending_community_submissions().empty                # never needed review
+    assert dt.contributor_status("Rafi")["points_balance"] == 1    # point credited right away
+
+
+def test_an_unusual_price_is_held_and_earns_no_point_until_approved(sandbox, points_sandbox, monkeypatch):
+    monkeypatch.setattr(dt, "COMMUNITY_PATH", str(sandbox / "community.csv"))
+    last_price, monthly = _dhaka_broiler()
+    locs, coms, medians = dt.known_names()
+
+    ok, status, info = dt.submit_community_price("2026-08-01", "Dhaka", "Broiler chicken",
+                                                 round(last_price * 2, 2), "Rafi", monthly, locs, coms, medians)
+    assert ok and status == "pending" and info["unusual"] is True
+    assert len(dt.load_uploaded()) == 0                             # not added yet
+    assert dt.contributor_status("Rafi")["points_balance"] == 0     # no point yet
+
+    pending = dt.pending_community_submissions()
+    assert len(pending) == 1 and pending.iloc[0]["contributor"] == "Rafi"
+    dt.review_community_submission(int(pending.iloc[0]["row_id"]), approve=True)
+    assert dt.pending_community_submissions().empty
+    assert len(dt.load_uploaded()) == 1
+    assert dt.contributor_status("Rafi")["points_balance"] == 1
+
+
+def test_submission_without_a_contributor_name_is_rejected():
+    last_price, monthly = _dhaka_broiler()
+    locs, coms, medians = dt.known_names()
+    ok, status, message = dt.submit_community_price("2026-08-01", "Dhaka", "Broiler chicken", last_price,
+                                                     "  ", monthly, locs, coms, medians)
+    assert not ok and status is None and "log in" in message
+
+
+def test_invalid_submission_is_rejected_with_a_reason_and_never_queued(sandbox, monkeypatch):
+    monkeypatch.setattr(dt, "COMMUNITY_PATH", str(sandbox / "community.csv"))
+    last_price, monthly = _dhaka_broiler()
+    locs, coms, medians = dt.known_names()
+
+    ok, status, message = dt.submit_community_price("2099-01-01", "Dhaka", "Broiler chicken", last_price,
+                                                     "Rafi", monthly, locs, coms, medians)
+    assert not ok and status is None and "future" in message
+    assert dt.pending_community_submissions().empty
+
+
+def test_rejecting_an_unusual_submission_leaves_the_uploaded_database_untouched(sandbox, points_sandbox, monkeypatch):
+    monkeypatch.setattr(dt, "COMMUNITY_PATH", str(sandbox / "community.csv"))
+    last_price, monthly = _dhaka_broiler()
+    locs, coms, medians = dt.known_names()
+    dt.submit_community_price("2026-08-01", "Dhaka", "Broiler chicken", round(last_price * 2, 2),
+                              "Rafi", monthly, locs, coms, medians)
+
+    pending = dt.pending_community_submissions()
+    dt.review_community_submission(int(pending.iloc[0]["row_id"]), approve=False)
+    assert dt.pending_community_submissions().empty
+    assert len(dt.load_uploaded()) == 0
+    assert dt.load_community_submissions().iloc[0]["status"] == "rejected"
+    assert dt.contributor_status("Rafi")["points_balance"] == 0
+
+
+# ---------------------------------------------------------------- points ledger
+@pytest.fixture
+def points_sandbox(monkeypatch, tmp_path):
+    monkeypatch.setattr(dt, "POINTS_PATH", str(tmp_path / "points.csv"))
+    return tmp_path
+
+
+def test_new_contributor_has_the_free_trials_and_no_points(points_sandbox):
+    status = dt.contributor_status("New Person")
+    assert status == {"free_remaining": dt.FREE_BUDGET_PLANS, "points_balance": 0}
+
+
+def test_free_trials_run_out_before_points_are_needed(points_sandbox):
+    for _ in range(dt.FREE_BUDGET_PLANS):
+        assert dt.consume_budget_plan_credit("Rafi") == "free_trial"
+    with pytest.raises(ValueError, match="No free trials or points"):
+        dt.consume_budget_plan_credit("Rafi")
+
+
+def test_a_point_buys_exactly_one_run_after_free_trials_are_used(points_sandbox):
+    for _ in range(dt.FREE_BUDGET_PLANS):
+        dt.consume_budget_plan_credit("Rafi")
+    dt.award_point("Rafi")
+    assert dt.contributor_status("Rafi")["points_balance"] == 1
+    assert dt.consume_budget_plan_credit("Rafi") == "point"
+    assert dt.contributor_status("Rafi")["points_balance"] == 0
+    with pytest.raises(ValueError):
+        dt.consume_budget_plan_credit("Rafi")
+
+
+def test_points_are_tracked_separately_per_contributor(points_sandbox):
+    for _ in range(dt.FREE_BUDGET_PLANS):
+        dt.consume_budget_plan_credit("Rafi")
+    assert dt.contributor_status("Rafi")["free_remaining"] == 0
+    assert dt.contributor_status("Someone Else")["free_remaining"] == dt.FREE_BUDGET_PLANS
+
+
+def test_leaderboard_ranks_by_points_and_skips_zero_balances(points_sandbox):
+    dt.award_point("Rafi")
+    dt.award_point("Rafi")
+    dt.award_point("Priya")
+    dt.consume_budget_plan_credit("Zero Points Zahid")           # uses a free trial only - never earns a point
+
+    board = dt.points_leaderboard()
+    assert list(board["contributor"]) == ["Rafi", "Priya"]
+    assert list(board["points_balance"]) == [2, 1]
+    assert "Zero Points Zahid" not in set(board["contributor"])
+
+
+# ---------------------------------------------------------------- submission statistics (Admin > Results)
+def test_submission_stats_are_all_zero_with_no_submissions(sandbox, monkeypatch):
+    monkeypatch.setattr(dt, "COMMUNITY_PATH", str(sandbox / "community.csv"))
+    stats = dt.submission_stats()
+    assert stats == {"total": 0, "auto_approved": 0, "pending": 0, "approved": 0, "rejected": 0,
+                     "moderate": 0, "severe": 0}
+
+
+def test_submission_stats_count_each_outcome(sandbox, points_sandbox, monkeypatch):
+    monkeypatch.setattr(dt, "COMMUNITY_PATH", str(sandbox / "community.csv"))
+    monthly = dt.load_effective_monthly()
+    locs, coms, medians = dt.known_names()
+
+    def last_price_in(location):
+        sub = monthly[(monthly["location"] == location) & (monthly["commodity"] == "Broiler chicken")]
+        return float(sub.sort_values("date")["price_per_kg"].iloc[-1])
+
+    # one normal submission -> auto_approved
+    dt.submit_community_price("2026-08-01", "Dhaka", "Broiler chicken",
+                              round(last_price_in("Dhaka") * 1.05, 2), "Rafi", monthly, locs, coms, medians)
+    # one moderately unusual submission, approved by an admin
+    dt.submit_community_price("2026-08-01", "Chattogram", "Broiler chicken",
+                              round(last_price_in("Chattogram") * 1.35, 2), "Rafi", monthly, locs, coms, medians)
+    pending = dt.pending_community_submissions()
+    dt.review_community_submission(int(pending.iloc[0]["row_id"]), approve=True)
+    # one severely unusual submission, rejected by an admin
+    dt.submit_community_price("2026-08-01", "Bogura", "Broiler chicken",
+                              round(last_price_in("Bogura") * 1.6, 2), "Rafi", monthly, locs, coms, medians)
+    pending2 = dt.pending_community_submissions()
+    dt.review_community_submission(int(pending2.iloc[0]["row_id"]), approve=False)
+
+    stats = dt.submission_stats()
+    assert stats["total"] == 3
+    assert stats["auto_approved"] == 1
+    assert stats["approved"] == 1
+    assert stats["rejected"] == 1
+    assert stats["pending"] == 0
+    assert stats["moderate"] == 1        # the one that was approved
+    assert stats["severe"] == 1          # the one that was rejected
