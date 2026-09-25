@@ -1,0 +1,17 @@
+date,location,commodity,price_per_kg
+2026-03,Dhaka,Telapia/Nilotica,210.00
+2026-03,Dhaka,Pangash (big),200.00
+2026-03,Dhaka,Ruhi (Local) - medium (2.50-4.50 kg),400.00
+2026-04,Dhaka,Hilsha (500-900) gm,2650.00
+2026-07,Dhaka,Broiler chicken,182.50
+2026-07,Dhaka,Sonali Chicken,320.00
+2026-09,Dhaka,Farm-raised Hen,164.50
+2026-09,Dhaka,Rice - Aman-Fine,73.50
+2026-09,Dhaka,Rice - Aman - Medium,58.00
+2026-09,Dhaka,Rice - Aman - Coarse,49.00
+2026-09,Dhaka,Rice-Boro-Fine,68.00
+2026-09,Dhaka,Rice-Boro-Medium,56.00
+2026-02,Chattogram,Broiler chicken,207.50
+2026-02,Chattogram,Sonali Chicken,320.00
+2026-09,Chattogram,Broiler chicken,180.00
+2026-09,Chattogram,Sonali Chicken,335.00

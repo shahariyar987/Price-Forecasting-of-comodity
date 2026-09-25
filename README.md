@@ -154,6 +154,28 @@ the baseline "next month = this month", and only replaces the current model when
 kept in `models/backups/`. The **Results** tab is where to check on accuracy afterwards - both the live model's
 current accuracy and the history of every retrain - without needing to retrain again just to see it.
 
+### Sample data (`data/samples/`)
+
+Two ready-to-upload CSVs, built from real, dated, sourced retail prices (DAM's live price ticker and dated news
+reports), not placeholder numbers - each row's source is listed below.
+
+- **`real_prices_upload.csv`** - 16 rows of chicken, rice and fish prices for Dhaka and Chattogram, Feb-Sep 2026.
+  Every commodity here already exists in the project (no checkbox needed).
+- **`cooking_essentials_upload.csv`** - 13 rows for Dhaka, Sept 2026: flour, sugar, salt, egg, lentils, chickpeas,
+  oil, onion, garlic, chili and ginger, taken from DAM's live ticker. These are all **new** commodities the
+  project has never tracked before (this project started from just chicken/rice/fish data), so uploading this
+  file needs the **"Allow NEW district / commodity names"** checkbox ticked first, or every row will be rejected
+  as unknown. Two things worth knowing about new commodities like these: they don't have a Chicken/Rice/Fish
+  category (`commodity_categories()` only knows the three from the original data, so the Budget planner won't
+  exclude them the way it excludes fish), and a new commodity needs `MIN_REAL_MONTHS` (6) consecutive uploaded
+  months, the same as any commodity, before it shows up in the Forecast tab at all - one month's snapshot is a
+  starting point, not immediately forecastable on its own.
+
+Sources: DAM's live retail price ticker ([market.dam.gov.bd](https://market.dam.gov.bd)), and dated market
+reports from The Business Standard, The Report, and tob.news. Bakery items (bread, biscuits, cake) are not
+included - they're branded packaged goods sold by piece, not commodities DAM or any other source tracks with
+per-kg district retail prices, so there was no real data to gather for them.
+
 ## Project structure
 
 ```
